@@ -8,7 +8,7 @@ def make_git_tools(ctx):
     def run(args):
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
         process = subprocess.run(
-            ["git", "--no-pager", "-c", "core.hooksPath=", *args],
+            ["git", "--literal-pathspecs", "--no-pager", "-c", "core.hooksPath=", *args],
             cwd=ctx.settings.workspace,
             capture_output=True,
             text=True,
@@ -42,7 +42,10 @@ def make_git_tools(ctx):
         """
         if not paths or not message.strip():
             raise ValueError("Provide a message and explicit paths")
-        safe_paths = [ctx.workspace.relative(ctx.workspace.resolve(p)) for p in paths]
+        targets = [ctx.workspace.resolve(p) for p in paths]
+        if any(target.is_dir() for target in targets):
+            raise ValueError("Select explicit file paths, not directories")
+        safe_paths = [ctx.workspace.relative(target) for target in targets]
         return run(["commit", "--only", "-m", message, "--", *safe_paths])
 
     return [git_status, git_diff, git_commit]

@@ -46,6 +46,49 @@ def test_ui_flag_reuses_workspace_without_calling_cli_model(tmp_path, monkeypatc
     assert seen[0][1:] == (True, 8899)
 
 
+def test_summary_options_reach_ui_settings(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        "soranimi.web.launcher.serve", lambda settings, demo, port: seen.append(settings)
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "--ui",
+            "--workspace",
+            str(tmp_path),
+            "--summary-model",
+            "openai:small",
+            "--summary-base-url",
+            "http://summary/v1",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert seen[0].summary_model == "openai:small"
+    assert seen[0].summary_base_url == "http://summary/v1"
+
+
+def test_standalone_ui_accepts_summary_options(tmp_path, monkeypatch):
+    from soranimi.web import launcher
+
+    seen = []
+    monkeypatch.setattr(launcher, "serve", lambda settings, demo, port: seen.append(settings))
+    result = CliRunner().invoke(
+        launcher.app,
+        [
+            "--workspace",
+            str(tmp_path),
+            "--summary-model",
+            "openai:small",
+            "--summary-base-url",
+            "http://summary/v1",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert seen[0].summary_model == "openai:small"
+    assert seen[0].summary_base_url == "http://summary/v1"
+
+
 def test_noninteractive_approval_remains_pending(tmp_path):
     model = ScriptedModel(responses=[calls(("bash", {"command": "echo approval"}))])
     with AgentSession(Settings(workspace=tmp_path), model) as session:

@@ -75,6 +75,7 @@ class Workbench:
     def __init__(self, settings, demo=False, model_factory=None):
         self.settings = settings
         self.demo = demo
+        self.custom_model_factory = model_factory is not None
         self.model_factory = model_factory or (
             lambda settings: DemoModel() if self.demo else create_model(settings)
         )
@@ -303,7 +304,13 @@ class Workbench:
         try:
             model = self.model_factory(settings)
             with AgentSession(
-                settings, model, resume=job.session_id, stop_event=job.stop
+                settings,
+                model,
+                resume=job.session_id,
+                stop_event=job.stop,
+                model_factory=self.model_factory
+                if self.demo or self.custom_model_factory
+                else None,
             ) as session:
                 value = (
                     Command(resume=approvals)

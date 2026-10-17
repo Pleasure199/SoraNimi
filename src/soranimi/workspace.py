@@ -100,7 +100,7 @@ class Workspace:
                     continue
                 rel = entry.relative_to(self.root)
                 if any(
-                    part in {".git", ".soranimi", ".venv", "node_modules", "__pycache__"}
+                    part.casefold() in {".git", ".soranimi", ".venv", "node_modules", "__pycache__"}
                     for part in rel.parts
                 ):
                     continue

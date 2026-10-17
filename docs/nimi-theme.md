@@ -12,6 +12,8 @@
 
 角色资源：[nimi-character.png](../src/soranimi/web/static/nimi-character.png)。1024 × 1536 RGBA PNG，透明通道已确认；欢迎页与头像使用 CSS 布局和裁切，不修改素材内容。
 
+新增表情资源：[nimi-avatar.jpg](../src/soranimi/web/static/nimi-avatar.jpg)，使用用户提供的眨眼图片原图。用于侧栏角色卡、欢迎区问候徽章及助手消息头像，按容器比例显示；欢迎页主立绘仍使用透明 PNG。两种主题共用本地素材。
+
 使用内置 **image_gen** 工具，以用户提供的图片为编辑参考提取角色。素材已复制到项目中，运行时不依赖临时文件、生成目录或外部网站。
 
 最终生成提示：

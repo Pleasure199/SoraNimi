@@ -24,6 +24,12 @@ class Settings:
     subagents: bool = False
     max_parallel: int = 6
     mcp_config: Path | None = None
+    summary_model: str | None = field(
+        default_factory=lambda: os.getenv("SORANIMI_SUMMARY_MODEL") or None
+    )
+    summary_base_url: str | None = field(
+        default_factory=lambda: os.getenv("SORANIMI_SUMMARY_BASE_URL") or None
+    )
 
     def __post_init__(self):
         self.workspace = self.workspace.expanduser().resolve()

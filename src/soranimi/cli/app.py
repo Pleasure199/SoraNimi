@@ -116,7 +116,7 @@ def handle_slash(text, session, renderer):
             from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
             session.transcript.append(messages)
-            summary = compact_history(messages, session.model, argument)
+            summary = compact_history(messages, session.summary_model, argument)
             session.graph.update_state(
                 session.config, {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *summary]}
             )
@@ -139,6 +139,12 @@ def main(
         "accept-edits", "--permission", help="manual / accept-edits / plan / auto"
     ),
     base_url: str | None = typer.Option(None, "--base-url"),
+    summary_model: str | None = typer.Option(
+        None, "--summary-model", help="独立上下文摘要模型 provider:model"
+    ),
+    summary_base_url: str | None = typer.Option(
+        None, "--summary-base-url", help="摘要模型的独立 API 地址"
+    ),
     data_dir: Path | None = typer.Option(None, "--data-dir"),
     recursion_limit: int = typer.Option(100, "--recursion-limit"),
     context_tokens: int = typer.Option(50000, "--context-tokens"),
@@ -158,6 +164,10 @@ def main(
     try:
         load_dotenv(workspace.expanduser().resolve() / ".env", override=False)
         kwargs = {"model": model} if model else {}
+        if summary_model is not None:
+            kwargs["summary_model"] = summary_model
+        if summary_base_url is not None:
+            kwargs["summary_base_url"] = summary_base_url
         settings = Settings(
             workspace=workspace,
             permission=permission,
@@ -186,7 +196,9 @@ def main(
         if not prompt and not demo and not sys.stdin.isatty():
             raise ValueError("非交互终端需要提供任务参数，或使用 --demo / --sessions")
         chosen_model = DemoModel() if demo else create_model(settings)
-        with AgentSession(settings, chosen_model, resume=resume) as session:
+        with AgentSession(
+            settings, chosen_model, resume=resume, summary_model=chosen_model if demo else None
+        ) as session:
             renderer = Renderer(console, verbose)
             console.print(f"SoraNimi {__version__} | session: {session.session_id}", markup=False)
             console.print(

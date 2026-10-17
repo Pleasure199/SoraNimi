@@ -1,9 +1,11 @@
 """Explicit providers with lazy imports, useful configuration errors, no globals."""
 
 import os
+from dataclasses import replace
+from functools import cached_property
 
 
-def create_model(settings):
+def create_model(settings, *, use_env_base_url=True):
     name = settings.model
     if ":" in name:
         provider, name = name.split(":", 1)
@@ -15,7 +17,7 @@ def create_model(settings):
             if name.startswith("deepseek")
             else "openai"
         )
-    base_url = settings.base_url or os.getenv("SORANIMI_BASE_URL")
+    base_url = settings.base_url or (os.getenv("SORANIMI_BASE_URL") if use_env_base_url else None)
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
@@ -41,3 +43,29 @@ def create_model(settings):
     return ChatOpenAI(
         model=name, api_key=key, base_url=base_url, timeout=120, max_retries=2, streaming=True
     )
+
+
+class SummaryModel:
+    """Create an optional separate client only when compaction is needed."""
+
+    def __init__(self, settings, fallback, factory=None):
+        self.settings = settings
+        self.fallback = fallback
+        self.factory = factory or (lambda selected: create_model(selected, use_env_base_url=False))
+
+    @cached_property
+    def client(self):
+        if not self.settings.summary_model:
+            return self.fallback
+        # A main-model custom endpoint may belong to another provider. Summary
+        # endpoints are explicit, otherwise create_model uses provider defaults.
+        return self.factory(
+            replace(
+                self.settings,
+                model=self.settings.summary_model,
+                base_url=self.settings.summary_base_url,
+            )
+        )
+
+    def invoke(self, messages, config=None):
+        return self.client.invoke(messages, config=config)

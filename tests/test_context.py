@@ -103,3 +103,102 @@ def test_fifty_turns_stay_resumable_without_orphan_results(tmp_path):
         assert len(result["messages"]) == 100
         assert_tool_pairs(result["messages"])
         assert all(isinstance(m[0], SystemMessage) for m in model.observed)
+
+
+def test_separate_summary_model_handles_automatic_and_manual_compaction(tmp_path):
+    import io
+
+    from rich.console import Console
+
+    from soranimi.cli.app import handle_slash
+    from soranimi.cli.renderer import Renderer
+
+    main = ScriptedModel(responses=[AIMessage(content="Continue coding")])
+    summary = ScriptedModel(
+        responses=[AIMessage(content="Automatic summary"), AIMessage(content="Manual summary")]
+    )
+    with AgentSession(
+        Settings(workspace=tmp_path, context_tokens=1000), main, summary_model=summary
+    ) as session:
+        result = session.graph.invoke(
+            {"messages": [HumanMessage(content="context " * 2000)]}, session.config
+        )
+        assert "Automatic summary" in result["messages"][0].content
+        assert main.cursor == 1 and summary.cursor == 1
+        handle_slash("/compact preserve paths", session, Renderer(Console(file=io.StringIO())))
+        messages = session.graph.get_state(session.config).values["messages"]
+        assert "Manual summary" in messages[0].content
+        assert "Focus: preserve paths" in summary.observed[1][0].content
+        assert main.cursor == 1 and summary.cursor == 2
+
+
+def test_summary_client_is_lazy_cached_and_uses_separate_endpoint(tmp_path):
+    from soranimi.agent.model_factory import SummaryModel
+
+    main = ScriptedModel(responses=[])
+    summary = ScriptedModel(responses=[AIMessage(content="one"), AIMessage(content="two")])
+    settings = Settings(
+        workspace=tmp_path,
+        model="openai:main",
+        base_url="http://main/v1",
+        summary_model="anthropic:summary",
+    )
+    seen = []
+
+    def factory(selected):
+        seen.append(selected)
+        return summary
+
+    lazy = SummaryModel(settings, main, factory)
+    assert not seen
+    lazy.invoke([HumanMessage(content="one")])
+    lazy.invoke([HumanMessage(content="two")])
+    assert len(seen) == 1
+    assert seen[0].model == "anthropic:summary" and seen[0].base_url is None
+    assert settings.base_url == "http://main/v1"
+    assert (
+        SummaryModel(Settings(workspace=tmp_path, summary_model=None), main, factory).client is main
+    )
+
+
+def test_summary_failure_preserves_checkpoint_history(tmp_path):
+    import pytest
+
+    main = ScriptedModel(responses=[calls(("compact", {}))])
+    summary = ScriptedModel(responses=[AIMessage(content="")])
+    with AgentSession(Settings(workspace=tmp_path), main, summary_model=summary) as session:
+        with pytest.raises(ValueError, match="empty summary"):
+            session.graph.invoke(
+                {"messages": [HumanMessage(content="Original task")]}, session.config
+            )
+        messages = session.graph.get_state(session.config).values["messages"]
+        assert messages[0].content == "Original task"
+        assert_tool_pairs(messages)
+
+
+def test_summary_endpoint_does_not_inherit_main_endpoint_environment(tmp_path, monkeypatch):
+    from soranimi.agent.model_factory import SummaryModel
+
+    monkeypatch.setenv("SORANIMI_BASE_URL", "http://main-only.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-placeholder")
+    monkeypatch.delenv("SORANIMI_SUMMARY_BASE_URL", raising=False)
+    settings = Settings(workspace=tmp_path, summary_model="openai:summary")
+    client = SummaryModel(settings, None).client
+    assert "main-only.invalid" not in str(client.root_client.base_url)
+
+
+def test_subagent_compaction_uses_separate_summary_model(tmp_path):
+    from soranimi.subagent.subgraph import run_worker
+
+    main = ScriptedModel(responses=[AIMessage(content="Read-only findings")])
+    summary = ScriptedModel(responses=[AIMessage(content="Preserve the research objective")])
+    result = run_worker(
+        "Inspect project " * 2000,
+        main,
+        [],
+        Settings(workspace=tmp_path, context_tokens=1000),
+        "",
+        summary_model=summary,
+    )
+    assert result["summary"] == "Read-only findings"
+    assert main.cursor == 1 and summary.cursor == 1

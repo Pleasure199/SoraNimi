@@ -38,6 +38,8 @@ def main(
     demo: bool = typer.Option(False, "--demo"),
     data_dir: Path | None = typer.Option(None, "--data-dir"),
     base_url: str | None = typer.Option(None, "--base-url"),
+    summary_model: str | None = typer.Option(None, "--summary-model"),
+    summary_base_url: str | None = typer.Option(None, "--summary-base-url"),
     subagents: bool = typer.Option(False, "--subagents"),
     mcp_config: Path | None = typer.Option(None, "--mcp"),
 ):
@@ -51,6 +53,8 @@ def main(
         subagents=subagents,
         mcp_config=mcp_config,
         **({"model": model} if model else {}),
+        **({"summary_model": summary_model} if summary_model is not None else {}),
+        **({"summary_base_url": summary_base_url} if summary_base_url is not None else {}),
     )
     serve(settings, demo, port)
 

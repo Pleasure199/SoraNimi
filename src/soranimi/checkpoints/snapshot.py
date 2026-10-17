@@ -84,6 +84,8 @@ class SnapshotStore:
             return f"Undid {key}"
 
     def diff(self) -> str:
+        from soranimi.tools.read_file import decode_text
+
         rows = self.db.execute(
             "SELECT path,before FROM edits WHERE session=? AND undone=0 ORDER BY id",
             (self.session_id,),
@@ -97,8 +99,8 @@ class SnapshotStore:
             after = path.read_bytes() if path.exists() else b""
             output.extend(
                 difflib.unified_diff(
-                    (before or b"").decode("utf-8", errors="replace").splitlines(True),
-                    after.decode("utf-8", errors="replace").splitlines(True),
+                    decode_text(before or b"")[0].splitlines(True),
+                    decode_text(after)[0].splitlines(True),
                     fromfile=f"a/{key}",
                     tofile=f"b/{key}",
                 )

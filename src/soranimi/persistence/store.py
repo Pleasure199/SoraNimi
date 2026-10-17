@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from itertools import islice
 from pathlib import Path
 
 
@@ -23,13 +24,18 @@ class MemoryStore:
 
     def search(self, namespace: str, query: str = "") -> list[dict]:
         rows = self.db.execute(
-            "SELECT key,value FROM memories WHERE namespace=? ORDER BY key LIMIT 100", (namespace,)
-        ).fetchall()
-        return [
-            {"key": key, "value": json.loads(value)}
-            for key, value in rows
-            if not query or query.casefold() in (key + value).casefold()
-        ]
+            "SELECT key,value FROM memories WHERE namespace=? ORDER BY key", (namespace,)
+        )
+        needle = query.casefold()
+        try:
+            matches = (
+                {"key": key, "value": json.loads(value)}
+                for key, value in rows
+                if not needle or needle in (key + value).casefold()
+            )
+            return list(islice(matches, 100))
+        finally:
+            rows.close()
 
     def close(self):
         self.db.close()

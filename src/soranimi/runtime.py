@@ -3,6 +3,7 @@
 from contextlib import ExitStack
 
 from soranimi.agent.graph import build_graph
+from soranimi.agent.model_factory import SummaryModel
 from soranimi.checkpoints.snapshot import SnapshotStore
 from soranimi.instructions.loader import load_instructions
 from soranimi.mcp.registry import merge_tools
@@ -17,9 +18,16 @@ from soranimi.workspace import Workspace
 
 
 class AgentSession:
-    def __init__(self, settings, model, resume=None, stop_event=None):
+    def __init__(
+        self, settings, model, resume=None, stop_event=None, summary_model=None, model_factory=None
+    ):
         self.settings = settings
         self.model = model
+        self.summary_model = (
+            summary_model
+            if summary_model is not None
+            else SummaryModel(settings, model, model_factory)
+        )
         self.resume = resume
         self.stop_event = stop_event
         self.stack = ExitStack()
@@ -58,7 +66,7 @@ class AgentSession:
                 from soranimi.subagent.spawn import make_subagent_tools
 
                 self.tools += make_subagent_tools(
-                    self.model, self.tools, self.settings, instructions
+                    self.model, self.tools, self.settings, instructions, self.summary_model
                 )
             if self.settings.mcp_config:
                 from soranimi.mcp.client import MCPConnection
@@ -76,6 +84,7 @@ class AgentSession:
                 self.transcript,
                 instructions,
                 self.stop_event,
+                summary_model=self.summary_model,
             )
             return self
         except BaseException:

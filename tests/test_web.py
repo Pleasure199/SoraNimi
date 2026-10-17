@@ -80,7 +80,14 @@ def test_static_assets_and_local_access_boundary(tmp_path):
         == 403
     )
     assert client.get("/", headers={"Host": "rebind.example"}).status_code == 400
-    for name in ["app.js", "app.css", "markdown.js", "logo.svg", "typography.css"]:
+    for name in [
+        "app.js",
+        "app.css",
+        "markdown.js",
+        "logo.svg",
+        "typography.css",
+        "nimi-avatar.jpg",
+    ]:
         assert client.get(f"/assets/{name}").status_code == 200
 
 
@@ -104,6 +111,33 @@ def test_demo_chat_sse_history_and_replay(tmp_path):
         replay = client.get(f"/api/jobs/{job_id}/events?after={last}", headers=HEADERS)
         assert "event: complete" in replay.text and "event: token" not in replay.text
         assert client.get("/api/sessions", headers=HEADERS).json()[0]["title"] == "探索这个项目"
+
+
+def test_web_worker_uses_configured_summary_model(tmp_path):
+    main = ScriptedModel(responses=[AIMessage(content="Continue from summary")])
+    summary = ScriptedModel(responses=[AIMessage(content="Preserve original task and paths")])
+    seen = []
+
+    def factory(settings):
+        seen.append(settings.model)
+        return summary if settings.model == "openai:summary" else main
+
+    service = Workbench(
+        Settings(
+            workspace=tmp_path,
+            model="openai:main",
+            summary_model="openai:summary",
+            context_tokens=1000,
+        ),
+        model_factory=factory,
+    )
+    session_id = service.create()["session"]["id"]
+    assert not seen  # Browsing sessions does not create either model client.
+    packets = wait_job(service.start(session_id, "Original task " * 2000))
+    assert packets[-1]["event"] == "complete", packets
+    assert seen == ["openai:main", "openai:summary"]
+    assert "Preserve original task" in packets[-1]["data"]["state"]["messages"][0]["text"]
+    assert main.cursor == 1 and summary.cursor == 1
 
 
 @pytest.mark.parametrize("approved", [True, False])

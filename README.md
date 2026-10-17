@@ -145,6 +145,20 @@ Enter 发送，Alt+Enter 换行，Ctrl+C 中断并保留会话。支持斜杠命
 `read_file` 可以返回 PNG/JPEG/WebP/GIF 内容块（需要模型支持图片）；`repo_map` 使用 Python AST 提取定义/导入并以 PageRank 排序。
 `remember_memory` 和 `recall_memory` 保存/查询跨会话项目偏好，采用本地 SQLite 关键词检索。
 
+### 独立规划与摘要模型
+
+启用 `--subagents` 后，主 Agent 还可以调用 `plan_and_execute`：独立 planner 生成研究问题，executor 并行派发只读子 Agent，replanner 根据累计结果调整下一轮问题或返回总结。默认最多 3 轮，可在工具参数中指定 1–5 轮；每轮不超过 6 个问题，受 `max_parallel` 限制。返回值包含研究结果、轮数、完成标记和剩余问题；预算耗尽或子任务失败时保留部分结果。此流程用于研究和任务分解，主 Agent 继续负责编辑和测试。
+
+自动压缩、`compact` 工具及 CLI `/compact` 支持单独使用摘要模型，省略时沿用主模型：
+
+```sh
+python -m soranimi --subagents --summary-model deepseek:deepseek-chat
+# 摘要模型使用独立的 OpenAI 兼容端点
+python -m soranimi --summary-model openai:summary-model --summary-base-url http://localhost:11434/v1
+```
+
+也可在工作区 `.env` 中设置 `SORANIMI_SUMMARY_MODEL`、`SORANIMI_SUMMARY_BASE_URL`。摘要模型使用现有的提供商 Key 配置，API 地址独立于主模型；未指定摘要地址时使用对应提供商默认地址。客户端在首次压缩时才创建，空摘要或调用失败会保留原检查点历史。上述参数同时适用于 `--ui` 和独立 `soranimi-ui` 入口；演示模式继续使用离线模型。
+
 ## 数据与开发验证
 
 默认数据在工作区 `.soranimi/`，可用 `--data-dir` 指定。包含：

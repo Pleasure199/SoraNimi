@@ -7,7 +7,7 @@ from soranimi.permission.approval import READ_TOOLS
 from soranimi.permission.modes import PermissionMode
 
 
-def run_worker(task, model, tools, settings, instructions):
+def run_worker(task, model, tools, settings, instructions, summary_model=None):
     """Workers cannot spawn workers, invoke MCP, execute shells or edit files."""
     child = Settings(
         workspace=settings.workspace,
@@ -29,6 +29,7 @@ def run_worker(task, model, tools, settings, instructions):
         InMemorySaver(),
         NoTranscript(),
         instructions,
+        summary_model=summary_model,
     )
     from uuid import uuid4
 

@@ -3,7 +3,7 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 
 
-def compact_history(messages, model, focus: str = "", keep_turns: int = 2):
+def compact_history(messages, model, focus: str = "", keep_turns: int = 2, config=None):
     human_indices = [i for i, msg in enumerate(messages) if isinstance(msg, HumanMessage)]
     cut = human_indices[-keep_turns] if len(human_indices) > keep_turns else len(messages)
     if cut == 0:
@@ -22,7 +22,8 @@ def compact_history(messages, model, focus: str = "", keep_turns: int = 2):
                     for m in older
                 )
             ),
-        ]
+        ],
+        config=config,
     )
     text = response.text if hasattr(response, "text") else str(response.content)
     if not text.strip():

@@ -74,7 +74,7 @@ function assistantMessage(text = '') {
   const article = element('article', 'message message-assistant');
   const heading = element('div', 'assistant-heading');
   const portrait = element('span', 'assistant-portrait');
-  const mark = document.createElement('img'); mark.src = '/assets/nimi-character.png'; mark.alt = '新海天';
+  const mark = document.createElement('img'); mark.src = '/assets/nimi-avatar.jpg'; mark.alt = '眨眼微笑的新海天'; mark.width = 31; mark.height = 31;
   portrait.append(mark);
   heading.append(portrait, element('span', '', '新海天'), element('span', '', state.boot?.demo ? '离线演示' : shortModel(state.view?.session.model || state.defaults.model)));
   const body = element('div', 'message-body');

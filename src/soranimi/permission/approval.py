@@ -13,7 +13,7 @@ READ_TOOLS = {
     "git_diff",
     "recall_memory",
 }
-LOCAL_TOOLS = {"compact", "update_plan", "spawn_subagent", "parallel_subagents"}
+LOCAL_TOOLS = {"compact", "update_plan", "spawn_subagent", "parallel_subagents", "plan_and_execute"}
 
 
 def decide(mode: PermissionMode, name: str, args: dict) -> tuple[Decision, str]:

@@ -20,7 +20,7 @@ def last_call_message(messages):
     return next(m for m in reversed(messages) if isinstance(m, AIMessage) and m.tool_calls)
 
 
-def create_nodes(model, tools, settings, system_prompt, transcript):
+def create_nodes(model, tools, settings, system_prompt, transcript, summary_model=None):
     by_name = {tool.name: tool for tool in tools}
     try:
         bound = model.bind_tools(tools)
@@ -103,12 +103,17 @@ def create_nodes(model, tools, settings, system_prompt, transcript):
             )
         return updates
 
-    def context_check(state):
+    def context_check(state, config):
         messages = state["messages"]
         transcript.append(messages)
         compacted = micro_compact(messages)
         if estimate_tokens(compacted) > settings.context_tokens or state.get("compact_requested"):
-            compacted = compact_history(compacted, model, state.get("compact_focus", ""))
+            compacted = compact_history(
+                compacted,
+                summary_model if summary_model is not None else model,
+                state.get("compact_focus", ""),
+                config=config,
+            )
         if compacted != messages:
             return {
                 "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *compacted],

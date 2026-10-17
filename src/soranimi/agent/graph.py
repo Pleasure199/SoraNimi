@@ -16,13 +16,22 @@ what changed, verification performed, and any remaining limitations honestly.
 """
 
 
-def build_graph(model, tools, settings, checkpointer, transcript, instructions="", stop_event=None):
+def build_graph(
+    model,
+    tools,
+    settings,
+    checkpointer,
+    transcript,
+    instructions="",
+    stop_event=None,
+    summary_model=None,
+):
     prompt = (
         SYSTEM_PROMPT
         + f"\nWorkspace: {settings.workspace}\nPermission mode: {settings.permission.value}\nShell: {'PowerShell' if __import__('os').name == 'nt' and settings.sandbox == 'subprocess' else 'sh'}\n"
         + instructions
     )
-    llm, execute, context = create_nodes(model, tools, settings, prompt, transcript)
+    llm, execute, context = create_nodes(model, tools, settings, prompt, transcript, summary_model)
 
     def control(state):
         # Keep pause and approval interrupts in different graph tasks. A cached
