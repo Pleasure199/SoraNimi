@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soranimi"
+version = "0.3.0"
+description = "A local-first coding agent powered by LangGraph"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "langgraph>=1.0,<1.3",
+  "langgraph-checkpoint-sqlite>=3,<4",
+  "langchain-core>=1.0,<2",
+  "langchain-openai>=1.0,<2",
+  "langchain-anthropic>=1.0,<2",
+  "typer>=0.16,<1",
+  "rich>=13.9,<15",
+  "prompt-toolkit>=3.0.48,<4",
+  "pathspec>=0.12,<1",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+mcp = ["langchain-mcp-adapters>=0.1,<1"]
+postgres = ["langgraph-checkpoint-postgres>=3,<4", "psycopg[binary,pool]>=3.2,<4"]
+ui = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+
+[project.scripts]
+soranimi = "soranimi.cli.app:run"
+soranimi-ui = "soranimi.web.launcher:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"soranimi.web" = ["static/*", "static/vendor/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]

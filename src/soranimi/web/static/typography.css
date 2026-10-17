@@ -1,0 +1,2 @@
+/* System font stacks keep the local workbench usable without network access. */
+textarea, input, button { font-variant-numeric: tabular-nums; }
