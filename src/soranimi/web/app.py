@@ -12,7 +12,9 @@ from pydantic import BaseModel, Field, StrictBool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from soranimi import __version__
+from soranimi.documents import MAX_FILE_BYTES, SUPPORTED_SUFFIXES, validate_filename
 from soranimi.permission.modes import PermissionMode
+from soranimi.persistence.attachments import AttachmentStore
 from soranimi.tools.read_file import decode_text
 from soranimi.web.service import BusyError, Workbench, encode_event
 from soranimi.workspace import Workspace
@@ -22,16 +24,20 @@ class SessionInput(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     permission: PermissionMode | None = None
     sandbox: str | None = None
+    subagent_model: str | None = Field(default=None, max_length=200)
+    subagents: StrictBool | None = None
 
 
 class RunInput(BaseModel):
     message: str | None = Field(default=None, max_length=30000)
     approvals: dict[str, StrictBool] | None = None
+    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
 
 
 def create_app(settings, demo=False, model_factory=None):
     service = Workbench(settings, demo, model_factory)
     token = secrets.token_urlsafe(32)
+    upload_gate = asyncio.Semaphore(2)
     assets = Path(__file__).parent / "static"
 
     @asynccontextmanager
@@ -98,8 +104,15 @@ def create_app(settings, demo=False, model_factory=None):
                 "model": settings.model,
                 "permission": settings.permission.value,
                 "sandbox": settings.sandbox,
+                "subagent_model": settings.subagent_model,
+                "subagents": settings.subagents,
             },
+            "models": [
+                {"id": alias, "model": profile["model"]}
+                for alias, profile in settings.model_profiles.items()
+            ],
             "demo": demo,
+            "uploads": {"max_bytes": MAX_FILE_BYTES, "extensions": sorted(SUPPORTED_SUFFIXES)},
             "sessions": service.sessions(),
             "active": {"id": active.id, "session_id": active.session_id}
             if active and not active.done
@@ -112,7 +125,9 @@ def create_app(settings, demo=False, model_factory=None):
 
     @app.post("/api/sessions", status_code=201)
     def new_session(body: SessionInput):
-        return service.create(body.model, body.permission, body.sandbox)
+        return service.create(
+            body.model, body.permission, body.sandbox, body.subagent_model, body.subagents
+        )
 
     @app.get("/api/sessions/{session_id}")
     def inspect(session_id: str):
@@ -121,8 +136,39 @@ def create_app(settings, demo=False, model_factory=None):
     @app.post("/api/sessions/{session_id}/run", status_code=202)
     def run(session_id: str, body: RunInput):
         message = body.message.strip() if body.message else None
-        job = service.start(session_id, message, body.approvals)
+        job = service.start(session_id, message, body.approvals, body.attachment_ids)
         return {"job_id": job.id, "session_id": session_id}
+
+    @app.post("/api/sessions/{session_id}/attachments", status_code=201)
+    async def upload(session_id: str, request: Request, filename: str):
+        # Stream the raw file, not a multipart body buffered by the web framework.
+        service.metadata(session_id)
+        validate_filename(filename)
+        if request.headers.get("content-length"):
+            try:
+                length = int(request.headers["content-length"])
+            except ValueError as exc:
+                raise ValueError("文件长度无效") from exc
+            if length > MAX_FILE_BYTES:
+                raise HTTPException(413, "文件超过 20 MiB 限制")
+        async with upload_gate:
+            data = bytearray()
+            async for chunk in request.stream():
+                if len(data) + len(chunk) > MAX_FILE_BYTES:
+                    raise HTTPException(413, "文件超过 20 MiB 限制")
+                data.extend(chunk)
+            return await asyncio.to_thread(
+                AttachmentStore(settings.data_dir, session_id).add, filename, bytes(data)
+            )
+
+    @app.get("/api/sessions/{session_id}/attachments/{attachment_id}")
+    def attachment(session_id: str, attachment_id: str, offset: int = 0, limit: int = 200):
+        from soranimi.tools.read_attachment import document_page
+
+        service.metadata(session_id)
+        item = AttachmentStore(settings.data_dir, session_id).read(attachment_id)
+        text = item.pop("text")
+        return {**item, "content": document_page(text, offset, limit, 24000)}
 
     @app.post("/api/sessions/{session_id}/undo")
     def undo(session_id: str):
@@ -177,6 +223,18 @@ def create_app(settings, demo=False, model_factory=None):
         target = Workspace(settings.workspace, settings.data_dir).resolve(path)
         if not target.is_file():
             raise HTTPException(404, "文件不存在")
+        from soranimi.documents import DOCUMENT_SUFFIXES, parse_document
+        from soranimi.tools.read_attachment import document_page
+
+        if target.suffix.lower() in DOCUMENT_SUFFIXES | {".doc", ".ppt"}:
+            if target.stat().st_size > MAX_FILE_BYTES:
+                raise ValueError("文档超过 20 MiB 限制")
+            parsed = parse_document(target.read_bytes(), target.name)
+            return {
+                "path": path,
+                "content": document_page(parsed["text"], 0, 200, 24000),
+                "truncated": parsed["truncated"],
+            }
         if target.stat().st_size > 1024 * 1024:
             raise ValueError("预览只支持 1 MiB 以内的文本文件")
         try:

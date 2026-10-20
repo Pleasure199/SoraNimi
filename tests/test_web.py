@@ -5,7 +5,7 @@ import threading
 import time
 
 import pytest
-from conftest import ScriptedModel, calls
+from conftest import ScriptedModel, calls, document_bytes
 from langchain_core.messages import AIMessage
 
 from soranimi.config import Settings
@@ -91,6 +91,134 @@ def test_static_assets_and_local_access_boundary(tmp_path):
         assert client.get(f"/assets/{name}").status_code == 200
 
 
+def test_upload_reference_read_tool_and_persisted_session(tmp_path):
+    model = ScriptedModel(responses=[])
+    with client_for(tmp_path, model) as client:
+        session_id = new_session(client)
+        response = client.post(
+            f"/api/sessions/{session_id}/attachments",
+            params={"filename": "资料.txt"},
+            content=("FIRST\n" * 600 + "TAIL SECRET").encode(),
+            headers=HEADERS,
+        )
+        assert response.status_code == 201, response.text
+        attachment = response.json()
+        preview = client.get(
+            f"/api/sessions/{session_id}/attachments/{attachment['id']}?offset=600", headers=HEADERS
+        )
+        assert "TAIL SECRET" in preview.json()["content"]
+        other = new_session(client)
+        assert (
+            client.get(
+                f"/api/sessions/{other}/attachments/{attachment['id']}", headers=HEADERS
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                f"/api/sessions/{other}/run",
+                headers=HEADERS,
+                json={"message": "Read", "attachment_ids": [attachment["id"]]},
+            ).status_code
+            == 400
+        )
+        model.responses = [
+            calls(("read_attachment", {"attachment_id": attachment["id"], "offset": 600})),
+            AIMessage(content="Read the tail"),
+        ]
+        _, events = run_http(
+            client, session_id, message="找出文档尾部", attachment_ids=[attachment["id"]]
+        )
+        assert events[-1]["event"] == "complete", events
+        assert "untrusted reference data" in model.observed[0][-1].content
+        assert "TAIL SECRET" not in model.observed[0][-1].content
+        assert "TAIL SECRET" in str(model.observed[-1][-1].content)
+        state = events[-1]["data"]["state"]
+        assert state["messages"][0]["text"] == "找出文档尾部"
+        assert state["attachments"][0]["id"] == attachment["id"]
+        assert client.get("/api/files", headers=HEADERS).json()["files"] == []
+    restarted = Workbench(Settings(workspace=tmp_path), demo=True)
+    assert restarted.inspect(session_id)["attachments"][0]["name"] == "资料.txt"
+    restarted.shutdown()
+
+
+@pytest.mark.parametrize("suffix", [".pdf", ".docx", ".pptx"])
+def test_document_upload_and_workspace_preview(tmp_path, suffix):
+    with client_for(tmp_path) as client:
+        session_id = new_session(client)
+        data = document_bytes(suffix)
+        response = client.post(
+            f"/api/sessions/{session_id}/attachments",
+            params={"filename": "report" + suffix},
+            headers=HEADERS,
+            content=data,
+        )
+        assert response.status_code == 201, response.text
+        attachment_id = response.json()["id"]
+        assert (
+            "Budget"
+            in client.get(
+                f"/api/sessions/{session_id}/attachments/{attachment_id}", headers=HEADERS
+            ).json()["content"]
+        )
+        (tmp_path / ("report" + suffix)).write_bytes(data)
+        preview = client.get("/api/file", params={"path": "report" + suffix}, headers=HEADERS)
+        assert preview.status_code == 200 and "Budget" in preview.json()["content"]
+
+
+def test_upload_security_validation_and_limits(tmp_path, monkeypatch):
+    from soranimi.web import app as web_app
+
+    with client_for(tmp_path) as client:
+        session_id = new_session(client)
+        url = f"/api/sessions/{session_id}/attachments"
+        assert client.post(url, params={"filename": "x.txt"}, content=b"x").status_code == 403
+        assert (
+            client.post(
+                url,
+                params={"filename": "x.txt"},
+                content=b"x",
+                headers={**HEADERS, "Origin": "https://untrusted.example"},
+            ).status_code
+            == 403
+        )
+        for name, data in [
+            ("../escape.txt", b"x"),
+            ("x.exe", b"x"),
+            ("x.ppt", b"old"),
+            ("x.pdf", b"bad"),
+            ("empty.txt", b""),
+        ]:
+            assert (
+                client.post(
+                    url, params={"filename": name}, content=data, headers=HEADERS
+                ).status_code
+                == 400
+            )
+        assert (
+            client.post(
+                url,
+                params={"filename": "big.txt"},
+                content=b"x",
+                headers={**HEADERS, "Content-Length": str(21 * 1024 * 1024)},
+            ).status_code
+            == 413
+        )
+        monkeypatch.setattr(web_app, "MAX_FILE_BYTES", 10)
+        assert (
+            client.post(
+                url,
+                params={"filename": "stream.txt"},
+                content=iter([b"123456", b"789012"]),
+                headers=HEADERS,
+            ).status_code
+            == 413
+        )
+        assert (
+            client.get(f"/api/sessions/{session_id}", headers=HEADERS).json()["attachments"] == []
+        )
+
+
 def test_demo_chat_sse_history_and_replay(tmp_path):
     with client_for(tmp_path) as client:
         session_id = new_session(client)
@@ -111,6 +239,52 @@ def test_demo_chat_sse_history_and_replay(tmp_path):
         replay = client.get(f"/api/jobs/{job_id}/events?after={last}", headers=HEADERS)
         assert "event: complete" in replay.text and "event: token" not in replay.text
         assert client.get("/api/sessions", headers=HEADERS).json()[0]["title"] == "探索这个项目"
+
+
+def test_named_models_and_worker_selection_through_http(tmp_path):
+    profiles = {
+        "main": {
+            "model": "openai:main",
+            "api_key_env": "PRIVATE_CREDENTIAL",
+            "base_url": "http://private.invalid/v1",
+        },
+        "worker": {"model": "openai:worker"},
+    }
+    seen = []
+
+    def factory(settings):
+        seen.append(settings.model)
+        if settings.model == "worker":
+            return ScriptedModel(responses=[AIMessage(content="Worker research")])
+        return ScriptedModel(
+            responses=[
+                calls(("spawn_subagent", {"task": "Inspect"})),
+                AIMessage(content="Main done"),
+            ]
+        )
+
+    settings = Settings(workspace=tmp_path, model="main", model_profiles=profiles)
+    with TestClient(
+        create_app(settings, model_factory=factory), base_url="http://127.0.0.1"
+    ) as client:
+        client.get("/")
+        bootstrap = client.get("/api/bootstrap", headers=HEADERS)
+        assert bootstrap.json()["models"] == [
+            {"id": "main", "model": "openai:main"},
+            {"id": "worker", "model": "openai:worker"},
+        ]
+        assert (
+            "PRIVATE_CREDENTIAL" not in bootstrap.text and "private.invalid" not in bootstrap.text
+        )
+        session_id = new_session(client, model="main", subagent_model="worker", subagents=True)
+        _, events = run_http(client, session_id, message="Research")
+        assert events[-1]["event"] == "complete", events
+        assert seen == ["main", "worker"]
+        final = events[-1]["data"]["state"]
+        assert final["session"]["subagent_model"] == "worker"
+        assert any("Worker research" in m.get("text", "") for m in final["messages"])
+        response = client.post("/api/sessions", headers=HEADERS, json={"subagent_model": "typo"})
+        assert response.status_code == 400
 
 
 def test_web_worker_uses_configured_summary_model(tmp_path):

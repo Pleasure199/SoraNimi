@@ -38,6 +38,8 @@ def main(
     demo: bool = typer.Option(False, "--demo"),
     data_dir: Path | None = typer.Option(None, "--data-dir"),
     base_url: str | None = typer.Option(None, "--base-url"),
+    models_config: Path | None = typer.Option(None, "--models-config"),
+    subagent_model: str | None = typer.Option(None, "--subagent-model"),
     summary_model: str | None = typer.Option(None, "--summary-model"),
     summary_base_url: str | None = typer.Option(None, "--summary-base-url"),
     subagents: bool = typer.Option(False, "--subagents"),
@@ -55,6 +57,8 @@ def main(
         **({"model": model} if model else {}),
         **({"summary_model": summary_model} if summary_model is not None else {}),
         **({"summary_base_url": summary_base_url} if summary_base_url is not None else {}),
+        **({"models_config": models_config} if models_config is not None else {}),
+        **({"subagent_model": subagent_model} if subagent_model is not None else {}),
     )
     serve(settings, demo, port)
 

@@ -20,6 +20,8 @@ from soranimi.cli.input_handler import create_input
 from soranimi.cli.renderer import Renderer
 from soranimi.config import Settings
 from soranimi.context.auto_compact import compact_history
+from soranimi.documents import MAX_FILE_BYTES
+from soranimi.persistence.attachments import AttachmentStore
 from soranimi.persistence.session import SessionManager
 from soranimi.persistence.time_travel import list_checkpoints, rewind
 from soranimi.runtime import AgentSession
@@ -139,6 +141,10 @@ def main(
         "accept-edits", "--permission", help="manual / accept-edits / plan / auto"
     ),
     base_url: str | None = typer.Option(None, "--base-url"),
+    models_config: Path | None = typer.Option(None, "--models-config", help="命名模型 JSON 配置"),
+    subagent_model: str | None = typer.Option(
+        None, "--subagent-model", help="默认子 Agent 模型或配置名"
+    ),
     summary_model: str | None = typer.Option(
         None, "--summary-model", help="独立上下文摘要模型 provider:model"
     ),
@@ -146,6 +152,9 @@ def main(
         None, "--summary-base-url", help="摘要模型的独立 API 地址"
     ),
     data_dir: Path | None = typer.Option(None, "--data-dir"),
+    attach: list[Path] = typer.Option(
+        [], "--attach", help="上传文档到当前会话（可重复，最多 8 个）"
+    ),
     recursion_limit: int = typer.Option(100, "--recursion-limit"),
     context_tokens: int = typer.Option(50000, "--context-tokens"),
     subagents: bool = typer.Option(False, "--subagents", help="启用只读子 Agent"),
@@ -163,11 +172,21 @@ def main(
     console = Console()
     try:
         load_dotenv(workspace.expanduser().resolve() / ".env", override=False)
+        if len(attach) > 8:
+            raise ValueError("每次最多引用 8 个附件")
+        if attach and (ui or sessions):
+            raise ValueError("--attach 用于 CLI 任务；Web 工作台请使用上传按钮")
+        if attach and not prompt:
+            prompt = "请解析并总结所选附件。"
         kwargs = {"model": model} if model else {}
         if summary_model is not None:
             kwargs["summary_model"] = summary_model
         if summary_base_url is not None:
             kwargs["summary_base_url"] = summary_base_url
+        if models_config is not None:
+            kwargs["models_config"] = models_config
+        if subagent_model is not None:
+            kwargs["subagent_model"] = subagent_model
         settings = Settings(
             workspace=workspace,
             permission=permission,
@@ -197,8 +216,23 @@ def main(
             raise ValueError("非交互终端需要提供任务参数，或使用 --demo / --sessions")
         chosen_model = DemoModel() if demo else create_model(settings)
         with AgentSession(
-            settings, chosen_model, resume=resume, summary_model=chosen_model if demo else None
+            settings,
+            chosen_model,
+            resume=resume,
+            summary_model=chosen_model if demo else None,
+            model_factory=(lambda selected: DemoModel()) if demo else None,
         ) as session:
+            attachment_context = ""
+            if attach:
+                if session.graph.get_state(session.config).next:
+                    raise ValueError("请先完成待审批或暂停的任务，再上传附件")
+                store = AttachmentStore(settings.data_dir, session.session_id)
+                ids = []
+                for path in attach:
+                    if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
+                        raise ValueError("附件必须是存在的文件，且不超过 20 MiB")
+                    ids.append(store.add(path.name, path.read_bytes())["id"])
+                attachment_context = store.context(ids)
             renderer = Renderer(console, verbose)
             console.print(f"SoraNimi {__version__} | session: {session.session_id}", markup=False)
             console.print(
@@ -213,7 +247,14 @@ def main(
             if prompt or demo:
                 if not run_turn(
                     session,
-                    {"messages": [HumanMessage(content=prompt or "请演示工具调用并列出工作区。")]},
+                    {
+                        "messages": [
+                            HumanMessage(
+                                content=(prompt or "请演示工具调用并列出工作区。")
+                                + attachment_context
+                            )
+                        ]
+                    },
                     renderer,
                     non_interactive,
                 ):

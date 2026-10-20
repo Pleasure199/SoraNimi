@@ -23,6 +23,7 @@ class AgentSession:
     ):
         self.settings = settings
         self.model = model
+        self.model_factory = model_factory
         self.summary_model = (
             summary_model
             if summary_model is not None
@@ -57,7 +58,11 @@ class AgentSession:
             )
             self.tools = create_tools(
                 ToolContext(
-                    self.settings, self.workspace, self.snapshots, create_executor(self.settings)
+                    self.settings,
+                    self.workspace,
+                    self.snapshots,
+                    create_executor(self.settings),
+                    self.session_id,
                 ),
                 self.memory,
             )
@@ -66,12 +71,26 @@ class AgentSession:
                 from soranimi.subagent.spawn import make_subagent_tools
 
                 self.tools += make_subagent_tools(
-                    self.model, self.tools, self.settings, instructions, self.summary_model
+                    self.model,
+                    self.tools,
+                    self.settings,
+                    instructions,
+                    self.summary_model,
+                    self.model_factory,
                 )
             if self.settings.mcp_config:
                 from soranimi.mcp.client import MCPConnection
 
-                connection = self.stack.enter_context(MCPConnection(self.settings.mcp_config))
+                connection = self.stack.enter_context(
+                    MCPConnection(
+                        self.settings.mcp_config,
+                        excluded_env=[
+                            p["api_key_env"]
+                            for p in self.settings.model_profiles.values()
+                            if "api_key_env" in p
+                        ],
+                    )
+                )
                 self.tools = merge_tools(self.tools, connection.tools)
             saver = self.stack.enter_context(
                 open_checkpointer(self.settings.data_dir / "checkpoints.db")

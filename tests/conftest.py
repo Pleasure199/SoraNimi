@@ -48,3 +48,56 @@ def session(tmp_path):
 @pytest.fixture
 def tools(session):
     return {tool.name: tool for tool in session.tools}
+
+
+def document_bytes(suffix):
+    """Small real documents; no network, Office installation or paid models."""
+    from io import BytesIO
+
+    stream = BytesIO()
+    if suffix == ".txt":
+        return "测试资料\nBudget: 42\n".encode()
+    if suffix == ".docx":
+        from docx import Document
+
+        doc = Document()
+        doc.add_paragraph("测试资料")
+        table = doc.add_table(rows=1, cols=2)
+        table.cell(0, 0).text = "Budget"
+        table.cell(0, 1).text = "42"
+        doc.add_paragraph("After table")
+        doc.save(stream)
+    elif suffix == ".pptx":
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        doc = Presentation()
+        slide = doc.slides.add_slide(doc.slide_layouts[6])
+        group = slide.shapes.add_group_shape()
+        group.shapes.add_textbox(0, 0, Inches(3), Inches(1)).text = "测试资料"
+        table = slide.shapes.add_table(1, 2, 0, Inches(1), Inches(4), Inches(1)).table
+        table.cell(0, 0).text = "Budget"
+        table.cell(0, 1).text = "42"
+        slide.notes_slide.notes_text_frame.text = "Speaker note"
+        doc.save(stream)
+    elif suffix == ".pdf":
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+        doc = PdfWriter()
+        page = doc.add_blank_page(width=600, height=800)
+        font = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+            }
+        )
+        page[NameObject("/Resources")] = DictionaryObject(
+            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): doc._add_object(font)})}
+        )
+        content = DecodedStreamObject()
+        content.set_data(b"BT /F1 12 Tf 10 700 Td (Budget: 42) Tj ET")
+        page[NameObject("/Contents")] = doc._add_object(content)
+        doc.write(stream)
+    return stream.getvalue()

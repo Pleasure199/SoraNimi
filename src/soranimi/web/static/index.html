@@ -6,8 +6,8 @@
   <title>SoraNimi · 新海天的编程工作台</title>
   <link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
   <link rel="stylesheet" href="/assets/app.css">
-  <link rel="stylesheet" href="/assets/nimi-theme.css">
-  <script type="module" src="/assets/app.js"></script>
+  <link rel="stylesheet" href="/assets/nimi-theme.css?v=uploads-1">
+  <script type="module" src="/assets/app.js?v=uploads-1"></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -78,9 +78,13 @@
       <div id="approval" class="approval-card" hidden></div>
       <div id="resume-bar" class="resume-bar" hidden><span><svg class="icon"><use href="#i-clock"/></svg>任务已暂停，可以从检查点继续。</span><button id="resume-task" class="small-button">继续任务 <span>↗</span></button></div>
       <form class="composer" id="composer">
+        <input type="file" id="upload-input" multiple hidden accept=".txt,.md,.csv,.json,.log,.tsv,.pdf,.docx,.pptx">
+        <div class="attachments" id="attachments" hidden aria-label="会话附件"></div>
         <label for="prompt" class="sr-only">向 SoraNimi 描述你的任务</label>
         <div class="composer-caption"><span><svg class="icon"><use href="#i-spark"/></svg>给天一个灵感</span><span>YOUR NEXT LITTLE BREAKTHROUGH</span></div>
         <textarea id="prompt" rows="2" placeholder="想写点什么？或者，把遇到的问题告诉我…" maxlength="30000"></textarea>
+        <div class="upload-hint">附件仅保存在本地；发送任务时，所选附件的解析文本将提供给当前模型。单个文件 ≤ 20 MiB。</div>
+        <button type="button" class="small-button" id="upload-file" disabled aria-label="上传文档">＋ 上传文档</button>
         <div class="composer-toolbar"><div class="composer-options"><button type="button" class="icon-button mention-button" id="mention-file" aria-label="引用工作区文件" title="引用工作区文件">@</button><span class="tiny-divider"></span><button type="button" class="model-picker" id="model-picker"><svg class="icon"><use href="#i-spark"/></svg><span id="model-name">选择模型</span><svg class="icon caret"><use href="#i-down"/></svg></button></div><div class="composer-actions"><span id="running-status" class="running-status" hidden><span class="pulse-dot"></span>正在思考</span><button type="button" class="stop-button" id="stop" aria-label="在当前步骤后暂停任务" title="在当前步骤完成后暂停" hidden><svg class="icon"><use href="#i-stop"/></svg></button><button type="submit" class="send-button" id="send" aria-label="发送任务" disabled><svg class="icon"><use href="#i-arrow"/></svg></button></div></div>
       </form>
       <div class="composer-footnote"><button id="permission-picker" class="permission-picker"><svg class="icon"><use href="#i-shield"/></svg><span id="permission-label">自动接受编辑</span></button><span>Enter 发送 <span class="hint-divider">·</span> Shift + Enter 换行</span></div>
@@ -95,7 +99,12 @@
   </aside>
 </div>
 
-<dialog id="settings-dialog" class="settings-dialog"><form id="settings-form"><div class="dialog-heading"><div><span class="eyebrow">MAKE IT YOURS</span><h2>工作台设置</h2></div><button class="icon-button" type="button" data-close="settings-dialog" aria-label="关闭设置"><svg class="icon"><use href="#i-close"/></svg></button></div><p class="dialog-description">选择适合你的协作方式。设置应用于新会话。</p><label class="field-label" for="setting-model">模型</label><input id="setting-model" class="text-input" required maxlength="200" placeholder="deepseek:deepseek-chat"><p class="field-hint">使用 provider:model 格式，API Key 从工作区 .env 读取。</p><label class="field-label" for="setting-permission">操作权限</label><select id="setting-permission" class="text-input"><option value="accept-edits">自动接受编辑 · 命令按风险审批</option><option value="manual">手动审批 · 每次编辑和命令都确认</option><option value="plan">只读规划 · 不修改文件</option><option value="auto">自动执行 · 危险命令仍需审批</option></select><label class="field-label" for="setting-sandbox">执行环境</label><select id="setting-sandbox" class="text-input"><option value="subprocess">本地进程</option><option value="docker">Docker 隔离环境</option></select><p class="field-hint" id="settings-note">Docker 需要已启动的 daemon 和构建好的镜像。</p><div class="dialog-footer"><button type="button" class="secondary-button" data-close="settings-dialog">取消</button><button type="submit" class="primary-button">应用并新建会话 <svg class="icon"><use href="#i-diagonal"/></svg></button></div></form></dialog>
+<dialog id="settings-dialog" class="settings-dialog"><form id="settings-form"><div class="dialog-heading"><div><span class="eyebrow">MAKE IT YOURS</span><h2>工作台设置</h2></div><button class="icon-button" type="button" data-close="settings-dialog" aria-label="关闭设置"><svg class="icon"><use href="#i-close"/></svg></button></div><p class="dialog-description">选择适合你的协作方式。设置应用于新会话。</p>
+<datalist id="configured-models"></datalist>
+<label class="field-label" for="setting-model">主模型</label><input id="setting-model" class="text-input" list="configured-models" required maxlength="200" placeholder="配置名或 provider:model"><p class="field-hint">可选择命名配置，或填写 provider:model；密钥仅从环境变量读取。</p>
+<label class="field-label" for="setting-subagents"><input type="checkbox" id="setting-subagents"> 启用只读子 Agent</label>
+<label class="field-label" for="setting-subagent-model">子 Agent 模型</label><input id="setting-subagent-model" class="text-input" list="configured-models" maxlength="200" placeholder="留空沿用主模型"><p class="field-hint">适用于单个、并行和规划研究中的子 Agent；规划器仍使用主模型。</p>
+<label class="field-label" for="setting-permission">操作权限</label><select id="setting-permission" class="text-input"><option value="accept-edits">自动接受编辑 · 命令按风险审批</option><option value="manual">手动审批 · 每次编辑和命令都确认</option><option value="plan">只读规划 · 不修改文件</option><option value="auto">自动执行 · 危险命令仍需审批</option></select><label class="field-label" for="setting-sandbox">执行环境</label><select id="setting-sandbox" class="text-input"><option value="subprocess">本地进程</option><option value="docker">Docker 隔离环境</option></select><p class="field-hint" id="settings-note">Docker 需要已启动的 daemon 和构建好的镜像。</p><div class="dialog-footer"><button type="button" class="secondary-button" data-close="settings-dialog">取消</button><button type="submit" class="primary-button">应用并新建会话 <svg class="icon"><use href="#i-diagonal"/></svg></button></div></form></dialog>
 <dialog id="search-dialog"><div class="dialog-heading"><h2>搜索会话</h2><button class="icon-button" data-close="search-dialog" aria-label="关闭搜索"><svg class="icon"><use href="#i-close"/></svg></button></div><input id="search-input" class="text-input" type="search" placeholder="按任务内容或模型搜索…" aria-label="搜索会话"><div id="search-results" class="search-results"></div></dialog>
 <dialog id="file-dialog" class="file-dialog"><div class="dialog-heading"><h2 id="file-title">文件预览</h2><button class="icon-button" data-close="file-dialog" aria-label="关闭文件预览"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="file-content" class="file-content"></div><div class="dialog-footer"><button class="secondary-button" id="copy-file"><svg class="icon"><use href="#i-copy"/></svg>复制内容</button><button class="primary-button" id="reference-file"><span>@</span>引用此文件</button></div></dialog>
 <div id="toast" class="toast" role="status" hidden></div>

@@ -14,6 +14,7 @@ from soranimi.agent.demo import DemoModel
 from soranimi.agent.graph import build_graph
 from soranimi.agent.model_factory import create_model
 from soranimi.context.token_estimator import estimate_tokens
+from soranimi.persistence.attachments import AttachmentStore
 from soranimi.persistence.checkpointer import open_checkpointer
 from soranimi.persistence.session import SessionManager
 from soranimi.persistence.transcript import Transcript
@@ -57,7 +58,11 @@ class Job:
 def message_view(message):
     """Only display text blocks; never send persisted base64 images to a sidebar."""
     if isinstance(message.content, str):
-        text = message.content
+        text = (
+            message.additional_kwargs.get("display_text", message.content)
+            if message.type == "human"
+            else message.content
+        )
     else:
         text = "\n".join(
             block.get("text", "[图片]") if isinstance(block, dict) else str(block)
@@ -89,6 +94,10 @@ class Workbench:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS web_sessions (id TEXT PRIMARY KEY, title TEXT, permission TEXT, sandbox TEXT)"
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(web_sessions)")}
+            for name, kind in (("subagent_model", "TEXT"), ("subagents", "INTEGER")):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE web_sessions ADD COLUMN {name} {kind}")
 
     def database(self):
         # Connection lifetime belongs to the request/worker thread using it.
@@ -108,13 +117,26 @@ class Workbench:
     def metadata(self, session_id):
         with self.database() as db:
             row = db.execute(
-                "SELECT s.id,s.model,s.updated,w.title,w.permission,w.sandbox FROM sessions s LEFT JOIN web_sessions w ON w.id=s.id WHERE s.id=? AND s.workspace=?",
+                "SELECT s.id,s.model,s.updated,w.title,w.permission,w.sandbox,w.subagent_model,w.subagents FROM sessions s LEFT JOIN web_sessions w ON w.id=s.id WHERE s.id=? AND s.workspace=?",
                 (session_id, str(self.settings.workspace)),
             ).fetchone()
         if row is None:
             raise LookupError("找不到此工作区中的会话")
         result = dict(
-            zip(("id", "model", "updated", "title", "permission", "sandbox"), row, strict=True)
+            zip(
+                (
+                    "id",
+                    "model",
+                    "updated",
+                    "title",
+                    "permission",
+                    "sandbox",
+                    "subagent_model",
+                    "subagents",
+                ),
+                row,
+                strict=True,
+            )
         )
         # Old CLI metadata does not record permission mode. Import it with a
         # conservative policy so rejecting an old approval cannot bypass it.
@@ -128,6 +150,12 @@ class Workbench:
             model=meta["model"],
             permission=meta["permission"] or self.settings.permission,
             sandbox=meta["sandbox"] or self.settings.sandbox,
+            subagent_model=meta["subagent_model"]
+            if meta["subagents"] is not None
+            else self.settings.subagent_model,
+            subagents=bool(meta["subagents"])
+            if meta["subagents"] is not None
+            else self.settings.subagents,
         )
 
     def sessions(self):
@@ -143,12 +171,18 @@ class Workbench:
             for row in rows
         ]
 
-    def create(self, model=None, permission=None, sandbox=None):
+    def create(
+        self, model=None, permission=None, sandbox=None, subagent_model=None, subagents=None
+    ):
         selected = replace(
             self.settings,
             model=model or self.settings.model,
             permission=permission or self.settings.permission,
             sandbox=sandbox or self.settings.sandbox,
+            subagent_model=self.settings.subagent_model
+            if subagent_model is None
+            else subagent_model or None,
+            subagents=self.settings.subagents if subagents is None else subagents,
         )
         manager = SessionManager(selected.data_dir / "sessions.db")
         try:
@@ -157,8 +191,15 @@ class Workbench:
             manager.close()
         with self.database() as db:
             db.execute(
-                "INSERT INTO web_sessions VALUES (?,?,?,?)",
-                (session_id, "新会话", selected.permission.value, selected.sandbox),
+                "INSERT INTO web_sessions (id,title,permission,sandbox,subagent_model,subagents) VALUES (?,?,?,?,?,?)",
+                (
+                    session_id,
+                    "新会话",
+                    selected.permission.value,
+                    selected.sandbox,
+                    selected.subagent_model,
+                    selected.subagents,
+                ),
             )
         return self.inspect(session_id)
 
@@ -196,6 +237,7 @@ class Workbench:
             "event_cursor": job.sequence if running else 0,
             "tokens": estimate_tokens(messages),
             "changes": self.changes(session_id),
+            "attachments": AttachmentStore(self.settings.data_dir, session_id).list(),
         }
 
     def changes(self, session_id):
@@ -255,8 +297,12 @@ class Workbench:
                 )
         return output
 
-    def start(self, session_id, message=None, approvals=None):
+    def start(self, session_id, message=None, approvals=None, attachment_ids=None):
         selected = self.session_settings(session_id)
+        attachment_ids = attachment_ids or []
+        if attachment_ids and (approvals is not None or not message):
+            raise ValueError("引用附件需要新任务内容，不能与审批同时发送")
+        document_context = AttachmentStore(selected.data_dir, session_id).context(attachment_ids)
         if not self.lock.acquire(blocking=False):
             raise BusyError("工作区已有任务运行，请等待完成或暂停后继续")
         try:
@@ -274,8 +320,15 @@ class Workbench:
             if message:
                 with self.database() as db:
                     db.execute(
-                        "INSERT OR IGNORE INTO web_sessions VALUES (?,?,?,?)",
-                        (session_id, "新会话", selected.permission.value, selected.sandbox),
+                        "INSERT OR IGNORE INTO web_sessions (id,title,permission,sandbox,subagent_model,subagents) VALUES (?,?,?,?,?,?)",
+                        (
+                            session_id,
+                            "新会话",
+                            selected.permission.value,
+                            selected.sandbox,
+                            selected.subagent_model,
+                            selected.subagents,
+                        ),
                     )
                     db.execute(
                         "UPDATE web_sessions SET title=? WHERE id=? AND title='新会话'",
@@ -290,7 +343,7 @@ class Workbench:
             self.active_job = job
             thread = threading.Thread(
                 target=self._run,
-                args=(job, selected, message, approvals),
+                args=(job, selected, message, approvals, document_context),
                 daemon=True,
                 name=f"soranimi-{job.id[:8]}",
             )
@@ -300,7 +353,7 @@ class Workbench:
             self.lock.release()
             raise
 
-    def _run(self, job, settings, message, approvals):
+    def _run(self, job, settings, message, approvals, document_context=""):
         try:
             model = self.model_factory(settings)
             with AgentSession(
@@ -315,7 +368,16 @@ class Workbench:
                 value = (
                     Command(resume=approvals)
                     if approvals is not None
-                    else {"messages": [HumanMessage(content=message)]}
+                    else {
+                        "messages": [
+                            HumanMessage(
+                                content=message + document_context,
+                                additional_kwargs={"display_text": message}
+                                if document_context
+                                else {},
+                            )
+                        ]
+                    }
                     if message
                     else None
                 )

@@ -2,7 +2,7 @@ import { element, icon, renderMarkdown } from './markdown.js';
 
 const $ = id => document.getElementById(id);
 const labels = { 'accept-edits': '自动接受编辑', manual: '手动审批', plan: '只读规划', auto: '自动执行' };
-const state = { boot: null, sessions: [], current: null, view: null, defaults: {}, busy: false, job: null, files: null, live: null, preview: null, tab: 'activity' };
+const state = { boot: null, sessions: [], current: null, view: null, defaults: {}, busy: false, uploading: false, selectedAttachments: new Set(), job: null, files: null, live: null, preview: null, tab: 'activity' };
 let toastTimer;
 
 function toast(text, error = false) {
@@ -39,12 +39,14 @@ function setBusy(value, job = null) {
   $('stop').disabled = false;
   $('send').hidden = value;
   $('prompt').disabled = value || hasPending() || Boolean(state.view?.resumable);
-  ['new-session', 'model-picker', 'permission-picker', 'settings'].forEach(id => { $(id).disabled = value; });
+  ['new-session', 'model-picker', 'permission-picker', 'settings'].forEach(id => { $(id).disabled = value || state.uploading; });
+  $('upload-file').disabled = value || state.uploading || hasPending() || Boolean(state.view?.resumable) || !state.boot;
+  $('upload-file').textContent = state.uploading ? '正在上传并解析…' : '＋ 上传文档';
   $('undo').disabled = value || !state.view?.changes?.length || Boolean(state.view?.resumable);
-  updateSend();
+  updateSend(); renderAttachments();
 }
 
-function updateSend() { $('send').disabled = state.busy || hasPending() || Boolean(state.view?.resumable) || !$('prompt').value.trim() || !state.boot; }
+function updateSend() { $('send').disabled = state.busy || state.uploading || hasPending() || Boolean(state.view?.resumable) || (!$('prompt').value.trim() && !state.selectedAttachments.size) || !state.boot; }
 function resizePrompt() { $('prompt').style.height = 'auto'; $('prompt').style.height = `${Math.min($('prompt').scrollHeight, 190)}px`; updateSend(); }
 
 function renderSessions() {
@@ -184,6 +186,7 @@ function renderApproval() {
 }
 
 function applyView(view) {
+  if (state.current !== view.session.id) state.selectedAttachments.clear();
   state.view = view; state.current = view.session.id;
   localStorage.setItem('soranimi-session', state.current);
   $('conversation-title').textContent = view.session.title || `会话 ${state.current.slice(0, 8)}`;
@@ -192,18 +195,19 @@ function applyView(view) {
   $('token-count').textContent = `${view.tokens.toLocaleString()} tokens`;
   $('token-meter').style.width = `${Math.min(100, view.tokens / 500)}%`;
   renderMessages(view.messages); renderActivity(view.messages); renderPlan(view.plan); renderChanges(view.changes);
+  renderAttachments();
   setBusy(view.running, view.job_id); renderApproval(); renderSessions(); scrollBottom(true);
 }
 
 async function selectSession(id) {
-  if (state.busy) { toast('请先等待当前任务完成，或暂停任务。'); return; }
+  if (state.busy || state.uploading) { toast('请先等待当前任务或文件上传完成。'); return; }
   const view = await api(`/sessions/${id}`);
   applyView(view); document.body.classList.remove('nav-open');
   if (view.running && view.job_id) listen(view.job_id, view.event_cursor || 0).catch(error => toast(error.message, true));
 }
 
 async function newSession(options = state.defaults) {
-  if (state.busy) { toast('请先等待当前任务完成，或暂停任务。'); return; }
+  if (state.busy || state.uploading) { toast('请先等待当前任务或文件上传完成。'); return; }
   const view = await post('/sessions', options);
   applyView(view); await refreshSessions();
   $('prompt').value = ''; resizePrompt(); $('prompt').focus();
@@ -286,6 +290,7 @@ async function runJob(body) {
   setBusy(true);
   try {
     const result = await post(`/sessions/${id}/run`, body);
+    if (body.message) { state.selectedAttachments.clear(); renderAttachments(); }
     if (body.message) {
       $('welcome').hidden = true; userMessage(body.message);
       $('prompt').value = ''; resizePrompt(); scrollBottom(true);
@@ -299,8 +304,50 @@ async function runJob(body) {
   }
 }
 
+function renderAttachments() {
+  const box = $('attachments'); box.replaceChildren();
+  const items = state.view?.attachments || [];
+  box.hidden = !items.length;
+  for (const item of items) {
+    const chip = element('div', 'attachment-chip');
+    const label = document.createElement('label');
+    const check = document.createElement('input'); check.type = 'checkbox'; check.checked = state.selectedAttachments.has(item.id);
+    check.disabled = state.busy || state.uploading || hasPending() || Boolean(state.view?.resumable);
+    check.setAttribute('aria-label', `引用附件 ${item.name}`);
+    check.addEventListener('change', () => { if (check.checked && state.selectedAttachments.size >= 8) { check.checked = false; toast('每次最多引用 8 个附件。', true); return; } if (check.checked) state.selectedAttachments.add(item.id); else state.selectedAttachments.delete(item.id); updateSend(); });
+    label.append(check);
+    const preview = element('button', '', item.name + (item.truncated ? ' · 已截断' : ''));
+    preview.type = 'button'; preview.title = `${item.characters.toLocaleString()} 字符 · 点击预览解析结果`;
+    preview.addEventListener('click', async () => { try { const data = await api(`/sessions/${state.current}/attachments/${item.id}`); state.preview = { ...data, attachment_id: item.id }; $('file-title').textContent = `附件：${item.name}`; $('file-content').replaceChildren(element('pre', 'file-code', data.content)); $('file-dialog').showModal(); } catch (error) { toast(error.message, true); } });
+    chip.append(label, preview); box.append(chip);
+  }
+}
+
+async function uploadFiles(files) {
+  if (!files.length || state.busy || state.uploading || hasPending() || state.view?.resumable) return;
+  if (files.length + state.selectedAttachments.size > 8) { toast('每次最多选择 8 个附件。', true); return; }
+  try {
+    state.uploading = true; setBusy(false); renderAttachments();
+    if (!state.current) { applyView(await post('/sessions', state.defaults)); await refreshSessions(); }
+    const sessionId = state.current;
+    for (const file of files) {
+      if (file.size > state.boot.uploads.max_bytes) { toast(`${file.name} 超过 20 MiB 限制。`, true); continue; }
+      toast(`正在上传并解析 ${file.name}…`);
+      try {
+        const uploaded = await api(`/sessions/${sessionId}/attachments?${new URLSearchParams({filename:file.name})}`, { method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:file });
+        state.view.attachments.push(uploaded); state.selectedAttachments.add(uploaded.id); renderAttachments();
+        toast(`${file.name} 解析完成${uploaded.truncated ? '（文本已截断）' : ''}。`);
+      } catch (error) { toast(`${file.name}：${error.message}`, true); }
+    }
+  } catch (error) { toast(error.message, true); }
+  finally { state.uploading = false; $('upload-input').value = ''; setBusy(false); renderAttachments(); }
+}
+
 function settingsDialog() {
   $('setting-model').value = state.view?.session.model || state.defaults.model;
+  $('setting-subagents').checked = Boolean(state.view?.session.subagents ?? state.defaults.subagents);
+  $('setting-subagent-model').value = state.view ? (state.view.session.subagent_model || '') : (state.defaults.subagent_model || '');
+  $('configured-models').replaceChildren(...(state.boot.models || []).map(item => { const option = document.createElement('option'); option.value = item.id; option.label = item.model; return option; }));
   $('setting-permission').value = state.view?.session.permission || state.defaults.permission;
   $('setting-sandbox').value = state.view?.session.sandbox || state.defaults.sandbox;
   $('settings-note').textContent = state.boot?.demo ? '当前为离线演示模式，不调用真实模型。真实编程任务请去掉启动参数 --demo。' : 'Docker 需要已启动的 daemon 和构建好的镜像。已有会话保留各自的设置。';
@@ -359,11 +406,13 @@ function theme(value) {
 
 $('prompt').addEventListener('input', resizePrompt);
 $('prompt').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); if (!$('send').disabled) $('composer').requestSubmit(); } });
-$('composer').addEventListener('submit', event => { event.preventDefault(); const message = $('prompt').value.trim(); if (message && !state.busy) runJob({ message }).catch(error => toast(error.message, true)); });
+$('composer').addEventListener('submit', event => { event.preventDefault(); const message = $('prompt').value.trim() || (state.selectedAttachments.size ? '请解析并总结所选附件。' : ''); if (message && !$('send').disabled) runJob({ message, attachment_ids:[...state.selectedAttachments] }).catch(error => toast(error.message, true)); });
+$('upload-file').addEventListener('click', () => $('upload-input').click());
+$('upload-input').addEventListener('change', () => uploadFiles([...$('upload-input').files]));
 $('new-session').addEventListener('click', () => newSession().catch(error => toast(error.message, true)));
 document.querySelectorAll('.suggestion').forEach(button => button.addEventListener('click', () => { $('prompt').value = button.dataset.prompt; resizePrompt(); $('prompt').focus(); }));
 ['settings', 'model-picker', 'permission-picker'].forEach(id => $(id).addEventListener('click', settingsDialog));
-$('settings-form').addEventListener('submit', async event => { event.preventDefault(); const options = { model: $('setting-model').value.trim(), permission: $('setting-permission').value, sandbox: $('setting-sandbox').value }; if (!options.model) return; try { await newSession(options); state.defaults = options; $('settings-dialog').close(); toast('新会话已准备就绪。'); } catch (error) { toast(error.message, true); } });
+$('settings-form').addEventListener('submit', async event => { event.preventDefault(); const options = { model: $('setting-model').value.trim(), subagent_model: $('setting-subagent-model').value.trim(), subagents: $('setting-subagents').checked, permission: $('setting-permission').value, sandbox: $('setting-sandbox').value }; if (!options.model) return; try { await newSession(options); state.defaults = options; $('settings-dialog').close(); toast('新会话已准备就绪。'); } catch (error) { toast(error.message, true); } });
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
 document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('click', event => { if (event.target === dialog) { const bounds = dialog.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close(); } }));
 $('search-session').addEventListener('click', () => { $('search-input').value = ''; renderSearch(); $('search-dialog').showModal(); $('search-input').focus(); });
@@ -375,7 +424,7 @@ document.querySelectorAll('[data-tab]').forEach(button => button.addEventListene
 $('file-filter').addEventListener('input', renderFiles);
 $('mention-file').addEventListener('click', async () => { document.body.classList.remove('inspector-hidden'); if (window.innerWidth <= 1050) document.body.classList.add('inspector-mobile-open'); try { await showTab('files'); $('file-filter').focus(); toast('选择文件预览，再点击「引用此文件」。'); } catch (error) { toast(error.message, true); } });
 $('copy-file').addEventListener('click', async () => { try { await navigator.clipboard.writeText(state.preview.content); toast('内容已复制。'); } catch { toast('浏览器未允许访问剪贴板。', true); } });
-$('reference-file').addEventListener('click', () => { if ($('prompt').disabled) { toast('请等待当前任务完成后再引用文件。'); return; } $('prompt').value += `${$('prompt').value ? ' ' : ''}@${state.preview.path} `; $('file-dialog').close(); resizePrompt(); $('prompt').focus(); });
+$('reference-file').addEventListener('click', () => { if ($('prompt').disabled || state.uploading) { toast('请等待当前任务完成后再引用文件。'); return; } if (state.preview.attachment_id) { if (!state.selectedAttachments.has(state.preview.attachment_id) && state.selectedAttachments.size >= 8) { toast('每次最多引用 8 个附件。',true); return; } state.selectedAttachments.add(state.preview.attachment_id); renderAttachments(); } else $('prompt').value += `${$('prompt').value ? ' ' : ''}@${state.preview.path} `; $('file-dialog').close(); resizePrompt(); $('prompt').focus(); });
 $('stop').addEventListener('click', async () => { if (!state.job) return; try { await post(`/jobs/${state.job}/stop`); $('stop').disabled = true; toast('将在当前步骤完成后暂停任务。'); } catch (error) { toast(error.message, true); } });
 $('resume-task').addEventListener('click', () => runJob({}).catch(error => toast(error.message, true)));
 $('undo').addEventListener('click', async () => { if (!state.current) return; $('undo').disabled = true; try { const data = await post(`/sessions/${state.current}/undo`); applyView(data.state); toast(data.message.startsWith('Undid') ? `已撤销 ${data.message.slice(6)}` : '没有可以撤销的文件修改。'); state.files = null; } catch (error) { toast(error.message, true); $('undo').disabled = false; } });
@@ -386,7 +435,8 @@ async function boot() {
   const data = await api('/bootstrap'); state.boot = data; state.sessions = data.sessions; state.defaults = data.defaults;
   $('workspace-name').textContent = data.workspace.name; $('workspace-path').textContent = data.workspace.path; $('workspace-path').title = data.workspace.path;
   $('project-crumb').textContent = data.workspace.name; $('mode-label').textContent = data.demo ? '离线演示' : '本地运行'; $('model-name').textContent = shortModel(data.defaults.model); $('permission-label').textContent = labels[data.defaults.permission];
-  renderSessions(); updateSend();
+  $('upload-input').accept = data.uploads.extensions.join(',');
+  renderSessions(); setBusy(false);
   const selected = data.active?.session_id || localStorage.getItem('soranimi-session');
   if (selected && data.sessions.some(item => item.id === selected)) await selectSession(selected);
 }

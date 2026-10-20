@@ -5,6 +5,7 @@ from soranimi.permission.modes import Decision, PermissionMode
 
 READ_TOOLS = {
     "read_file",
+    "read_attachment",
     "list_dir",
     "glob",
     "grep",

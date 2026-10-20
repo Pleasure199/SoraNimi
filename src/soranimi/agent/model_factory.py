@@ -6,7 +6,8 @@ from functools import cached_property
 
 
 def create_model(settings, *, use_env_base_url=True):
-    name = settings.model
+    profile = settings.model_profiles.get(settings.model)
+    name = profile["model"] if profile else settings.model
     if ":" in name:
         provider, name = name.split(":", 1)
     else:
@@ -17,17 +18,26 @@ def create_model(settings, *, use_env_base_url=True):
             if name.startswith("deepseek")
             else "openai"
         )
-    base_url = settings.base_url or (os.getenv("SORANIMI_BASE_URL") if use_env_base_url else None)
+    base_url = (
+        profile.get("base_url")
+        if profile
+        else settings.base_url or (os.getenv("SORANIMI_BASE_URL") if use_env_base_url else None)
+    )
+    key_env = profile.get("api_key_env") if profile else None
+    key = os.getenv(key_env) if key_env else None
+    if key_env and not key:
+        raise ValueError(f"Set {key_env} for the selected model profile")
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        if not os.getenv("ANTHROPIC_API_KEY"):
+        if not key and not os.getenv("ANTHROPIC_API_KEY"):
             raise ValueError("Set ANTHROPIC_API_KEY for Anthropic models")
         return ChatAnthropic(
             model=name,
             max_tokens=8192,
             timeout=120,
             max_retries=2,
+            **({"api_key": key} if key else {}),
             **({"base_url": base_url} if base_url else {}),
         )
     if provider not in {"openai", "deepseek"}:
@@ -35,9 +45,11 @@ def create_model(settings, *, use_env_base_url=True):
     from langchain_openai import ChatOpenAI
 
     env_key = "DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY"
-    key = os.getenv("SORANIMI_API_KEY") or os.getenv(env_key)
+    key = key or (
+        os.getenv(env_key) if profile else os.getenv("SORANIMI_API_KEY") or os.getenv(env_key)
+    )
     if not key:
-        raise ValueError(f"Set {env_key} or SORANIMI_API_KEY")
+        raise ValueError(f"Set {env_key}" if profile else f"Set {env_key} or SORANIMI_API_KEY")
     if provider == "deepseek" and not base_url:
         base_url = "https://api.deepseek.com"
     return ChatOpenAI(

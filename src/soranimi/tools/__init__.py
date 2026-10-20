@@ -14,6 +14,7 @@ from soranimi.tools.edit_file import make_edit_file
 from soranimi.tools.glob_tool import make_glob
 from soranimi.tools.grep_tool import make_grep
 from soranimi.tools.list_dir import make_list_dir
+from soranimi.tools.read_attachment import make_read_attachment
 from soranimi.tools.read_file import make_read_file
 from soranimi.tools.write_file import make_write_file
 
@@ -64,6 +65,7 @@ def create_tools(ctx, memory):
 
     return [
         make_read_file(ctx),
+        make_read_attachment(ctx),
         make_list_dir(ctx),
         make_glob(ctx),
         make_grep(ctx),

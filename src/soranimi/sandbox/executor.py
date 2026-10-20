@@ -28,4 +28,10 @@ def create_executor(settings) -> Executor:
         )
     from soranimi.sandbox.subprocess_exec import SubprocessExecutor
 
-    return SubprocessExecutor(settings.workspace, settings.max_output)
+    return SubprocessExecutor(
+        settings.workspace,
+        settings.max_output,
+        excluded_env=[
+            p["api_key_env"] for p in settings.model_profiles.values() if "api_key_env" in p
+        ],
+    )

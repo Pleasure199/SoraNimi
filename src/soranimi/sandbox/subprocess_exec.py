@@ -10,9 +10,10 @@ from soranimi.sandbox.executor import ExecutionResult
 
 
 class SubprocessExecutor:
-    def __init__(self, workspace: Path, max_output: int = 24000):
+    def __init__(self, workspace: Path, max_output: int = 24000, excluded_env=()):
         self.workspace = workspace
         self.max_output = max_output
+        self.excluded_env = {name.upper() for name in excluded_env}
 
     @staticmethod
     def kill_tree(process):
@@ -75,7 +76,8 @@ class SubprocessExecutor:
         env = {
             key: value
             for key, value in os.environ.items()
-            if not any(word in key.upper() for word in ("API_KEY", "SECRET", "TOKEN", "PASSWORD"))
+            if key.upper() not in self.excluded_env
+            and not any(word in key.upper() for word in ("API_KEY", "SECRET", "TOKEN", "PASSWORD"))
         }
         env["PYTHONIOENCODING"] = "utf-8"
         env["GIT_TERMINAL_PROMPT"] = "0"

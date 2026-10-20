@@ -14,3 +14,4 @@ class ToolContext:
     workspace: Workspace
     snapshots: SnapshotStore
     executor: Executor
+    session_id: str | None = None

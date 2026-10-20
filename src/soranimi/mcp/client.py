@@ -9,8 +9,9 @@ from langchain_core.tools import StructuredTool
 
 
 class MCPConnection:
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, excluded_env=()):
         self.path = config_path
+        self.excluded_env = {name.upper() for name in excluded_env}
         self.loop = None
         self.thread = None
 
@@ -38,7 +39,8 @@ class MCPConnection:
                 defaults = {
                     key: value
                     for key, value in os.environ.items()
-                    if not any(
+                    if key.upper() not in self.excluded_env
+                    and not any(
                         word in key.upper() for word in ("API_KEY", "SECRET", "TOKEN", "PASSWORD")
                     )
                 }

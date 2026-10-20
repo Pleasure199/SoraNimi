@@ -1,0 +1,15 @@
+{
+  "main": {
+    "model": "deepseek:deepseek-chat",
+    "api_key_env": "DEEPSEEK_API_KEY"
+  },
+  "research": {
+    "model": "openai:your-research-model",
+    "base_url": "http://localhost:11434/v1",
+    "api_key_env": "RESEARCH_API_KEY"
+  },
+  "review": {
+    "model": "anthropic:your-review-model",
+    "api_key_env": "ANTHROPIC_API_KEY"
+  }
+}

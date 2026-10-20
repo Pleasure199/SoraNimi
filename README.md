@@ -116,6 +116,49 @@ Enter 发送，Alt+Enter 换行，Ctrl+C 中断并保留会话。支持斜杠命
 
 `--subagents` 开启 `spawn_subagent` 和 `parallel_subagents`。子 Agent 具有独立消息上下文，仅执行代码研究并返回摘要；最多并行 6 个，不能继续派生子 Agent。主 Agent 通过 `update_plan` 维护步骤，负责修改代码和运行测试。
 
+### 多模型配置与子 Agent 模型选择
+
+可在同一个 JSON 文件中定义多个命名模型，各自使用独立提供商、API 地址和密钥环境变量。复制并修改 [models.example.json](models.example.json)，将示例模型名换成账号实际可用的模型；不要填写明文密钥。`api_key_env` 指定的变量可放在工作区 `.env` 中。
+
+```json
+{
+  "main": {"model": "deepseek:deepseek-chat", "api_key_env": "DEEPSEEK_API_KEY"},
+  "research": {"model": "openai:your-model", "base_url": "http://localhost:11434/v1", "api_key_env": "RESEARCH_API_KEY"}
+}
+```
+
+```sh
+python -m soranimi --ui --models-config models.json --model main --subagents --subagent-model research
+# CLI 使用相同参数，去掉 --ui 即可；独立 soranimi-ui 入口同样支持。
+```
+
+`--models-config` 的相对路径以工作区为基准，也可设置 `SORANIMI_MODELS_CONFIG`；默认子 Agent 模型可通过 `SORANIMI_SUBAGENT_MODEL` 设置。原有 `--model provider:model` 仍可使用；不指定子 Agent 模型时沿用主模型。`--summary-model` 也支持配置名。
+
+Web 设置页支持选择主模型、开启只读子 Agent 并选择其默认模型，应用于新会话并保留到会话恢复。浏览器只接收配置名和模型名，不接收密钥或 API 地址。配置文件仍在服务端维护，修改后重启服务。
+
+主 Agent 可在 `spawn_subagent(task, model="research")`、`parallel_subagents(tasks, model="research")` 中为本次委派选择配置；`plan_and_execute` 使用 `worker_model="research"`。工具参数只接受已配置的名称，省略时使用默认子 Agent 模型；规划器和重规划器仍使用主模型。
+
+命名配置不会继承全局 `SORANIMI_BASE_URL` / `SORANIMI_API_KEY`；省略 `base_url` 使用提供商默认地址，省略 `api_key_env` 使用对应提供商的标准 Key 变量。指定的密钥变量缺失时直接报错，不会借用其他模型账号。直接指定子 Agent 的 `provider:model` 时也不继承主模型自定义地址；需要独立地址或密钥时请使用命名配置。
+
+### 上传与解析文档
+
+Web 输入区点击「上传文档」，可上传 TXT、MD、CSV、JSON、LOG、TSV、PDF、Word `.docx` 和 PowerPoint `.pptx`。解析完成后可预览文本、勾选附件并发送任务；没有输入问题时默认总结所选附件。后续提问可再次勾选会话中已上传的附件。
+
+- 文本支持 UTF-8（含 BOM）、带 BOM 的 UTF-16 和 GB18030。PDF 提取可选取的文字并保留页码标记；DOCX 提取正文段落和表格；PPTX 提取文本框、分组、表格及演讲者备注，保留幻灯片编号。
+- 旧版 `.doc`/`.ppt` 需先另存为 `.docx`/`.pptx`；不支持加密文档、OCR、嵌入图片内容或完整视觉版式还原。复杂 PDF 的阅读顺序和表格结构可能不完整，请核对原件。
+- 单文件最多 20 MiB；PDF/PPTX 最多 500 页/张；每次最多引用 8 个附件；每会话最多 20 个、累计 100 MiB。解析文本最多保留 50 万字符，截断时提示。Office 解压体积和条目数量也有限制。
+- 二进制文档在独立 Python 进程中解析，超时 30 秒，支持的平台附加 CPU/内存限制，不启动 Office、不执行宏、不获取外链。进程限制并非完整操作系统沙箱。
+- 原件和解析文本存入数据目录的 `attachments.db`，不覆盖源码；附件 ID 只在所属会话可读取。仅上传不会调用模型；发送任务时会将所选附件的有界文本片段提供给当前模型，模型可通过 `read_attachment` 按行分页继续读取。文档内容按不可信参考资料处理，不作为操作授权。取消勾选只是取消本次引用，不删除本地原件。
+
+CLI 可通过重复 `--attach` 导入用户指定的文件（允许工作区外路径），并带问题启动任务：
+
+```sh
+conda activate Lang
+python -m soranimi "总结需求并提取待办" --attach ./requirements.pdf --attach ./slides.pptx
+```
+
+工作区内的 PDF/DOCX/PPTX 也可通过现有 `read_file` 工具解析，不授予对二进制原件的编辑资格。解析接口参考：[pypdf](https://pypdf.readthedocs.io/en/stable/modules/PdfReader.html)、[python-docx](https://python-docx.readthedocs.io/en/stable/api/document.html)、[python-pptx](https://python-pptx.readthedocs.io/en/latest/user/notes.html)。
+
 ### MCP
 
 安装 `pip install -e ".[mcp]"` 后，显式通过 `--mcp 配置.json` 加载服务器：

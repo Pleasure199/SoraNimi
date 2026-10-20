@@ -21,11 +21,28 @@ def make_read_file(ctx):
 
         Use pages for large files. edit_file requires one complete, untruncated
         read first; increase limit if necessary (maximum 20000). Images return
-        image content blocks. Files outside the workspace are inaccessible.
+        image content blocks. PDF/DOCX/PPTX return extracted text, not an editable
+        source read. Files outside the workspace are inaccessible.
         """
         if offset < 0 or not 1 <= limit <= 20000:
             raise ValueError("offset must be >= 0 and limit between 1 and 20000")
         target = ctx.workspace.resolve(path)
+        from soranimi.documents import DOCUMENT_SUFFIXES, MAX_FILE_BYTES, parse_document
+
+        if target.suffix.lower() in DOCUMENT_SUFFIXES | {".doc", ".ppt"}:
+            from soranimi.tools.read_attachment import document_page
+
+            if target.stat().st_size > MAX_FILE_BYTES:
+                raise ValueError("Document exceeds the 20 MiB read limit")
+            parsed = parse_document(target.read_bytes(), target.name)
+            warning = "[Extraction truncated at 500000 characters]\n" if parsed["truncated"] else ""
+            return [
+                {
+                    "type": "text",
+                    "text": warning
+                    + document_page(parsed["text"], offset, limit, ctx.settings.max_output),
+                }
+            ]
         if target.stat().st_size > 5 * 1024 * 1024:
             raise ValueError("File exceeds the 5 MiB read limit")
         data = target.read_bytes()

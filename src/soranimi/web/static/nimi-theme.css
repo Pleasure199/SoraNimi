@@ -212,6 +212,12 @@ body { font-size: 13px; }
 dialog { background: var(--surface); border-color: var(--border); border-radius: 17px; }
 dialog::backdrop { background: #2e27444d; backdrop-filter: blur(7px); }
 .dialog-heading .eyebrow { color: var(--accent-strong); }
+.settings-dialog .field-label { margin: 14px 0 8px; }
+.settings-dialog .dialog-footer { margin-top: 20px; padding-top: 14px; }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; max-height: 110px; overflow: auto; margin-bottom: 10px; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; background: var(--surface); max-width: 100%; }
+.attachment-chip button { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.upload-hint { color: var(--muted); font-size: 10px; line-height: 1.6; margin-bottom: 7px; }
 .text-input { background: var(--bg); border-color: var(--border); border-radius: 9px; }
 .primary-button { color: #fff; background: var(--accent); }
 .primary-button:hover:enabled { background: var(--accent-strong); color: #fff; filter: brightness(1.08); }
